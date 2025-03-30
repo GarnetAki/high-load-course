@@ -10,8 +10,7 @@ import ru.quipy.payments.api.PaymentAggregate
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
-import java.util.concurrent.Semaphore
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.*
 
 
 // Advice: always treat time as a Duration
@@ -32,19 +31,18 @@ class PaymentExternalSystemAdapterImpl(
     private val requestAverageProcessingTime = properties.averageProcessingTime
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
-    private val connectionTimeout = requestAverageProcessingTime
+    private val parts = 10
+    private val timeLimit = requestAverageProcessingTime.toMillis() / 2
+//    private val connectionTimeout = requestAverageProcessingTime
 //        .plusMillis(requestAverageProcessingTime.toMillis() / 2)
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(connectionTimeout)
-        .readTimeout(connectionTimeout)
-        .callTimeout(connectionTimeout)
-        .writeTimeout(connectionTimeout)
+//        .callTimeout(Duration.ofMillis(timeLimit))
         .build()
 
     private val semaphore = Semaphore(parallelRequests)
-    private val inputLimiter = FixedWindowRateLimiter((parallelRequests * 1000L /  requestAverageProcessingTime.toMillis()).toInt(), 1000L, TimeUnit.MILLISECONDS)
-    private val rateLimiter = FixedWindowRateLimiter(rateLimitPerSec, 1000L, TimeUnit.MILLISECONDS)
+    private val inputLimiter = FixedWindowRateLimiter((parallelRequests * 1000L /  requestAverageProcessingTime.toMillis()).toInt(), 1050L, TimeUnit.MILLISECONDS)
+    private val rateLimiter = FixedWindowRateLimiter(rateLimitPerSec / parts, 1050L / parts, TimeUnit.MILLISECONDS)
 
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
@@ -52,7 +50,7 @@ class PaymentExternalSystemAdapterImpl(
         val transactionId = UUID.randomUUID()
 
         inputLimiter.tickBlocking()
-        if (deadline < now() + requestAverageProcessingTime.toMillis()) {
+        if (deadline < now() + timeLimit) {
             logger.info("UwU")
             paymentESService.update(paymentId) {
                 it.logProcessing(false, now(), transactionId, reason = "Request timeout.")
@@ -60,8 +58,16 @@ class PaymentExternalSystemAdapterImpl(
             return
         }
         semaphore.acquire()
+        if (deadline < now() + timeLimit) {
+            semaphore.release()
+            logger.info("Release because of deadline. Semaphore queue length: ${semaphore.queueLength}")
+            paymentESService.update(paymentId) {
+                it.logProcessing(false, now(), transactionId, reason = "Request timeout.")
+            }
+            return
+        }
         rateLimiter.tickBlocking()
-        if (deadline < now() + requestAverageProcessingTime.toMillis()) {
+        if (deadline < now() + timeLimit) {
             semaphore.release()
             logger.info("Release because of deadline. Semaphore queue length: ${semaphore.queueLength}")
             paymentESService.update(paymentId) {
@@ -99,7 +105,7 @@ class PaymentExternalSystemAdapterImpl(
                 paymentESService.update(paymentId) {
                     it.logProcessing(body.result, now(), transactionId, reason = body.message)
                 }
-                logger.info("completed, time = ${startTime - now()}ms")
+                logger.info("completed, time = ${now() - startTime}ms")
 
                 semaphore.release()
                 logger.info("Release. Semaphore queue length: ${semaphore.queueLength}")

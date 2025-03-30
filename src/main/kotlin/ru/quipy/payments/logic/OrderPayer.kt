@@ -25,11 +25,13 @@ class OrderPayer {
 
     @Autowired
     private lateinit var paymentService: PaymentService
+    private val testTimeMs = 500000L
+    private val poolSize = 60
 
     private val paymentExecutor = ThreadPoolExecutor(
-        16,
-        16,
-        0L,
+        poolSize,
+        poolSize,
+        testTimeMs,
         TimeUnit.MILLISECONDS,
         LinkedBlockingQueue(8_000),
         NamedThreadFactory("payment-submission-executor"),
