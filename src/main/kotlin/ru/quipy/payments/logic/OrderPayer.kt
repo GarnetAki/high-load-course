@@ -26,7 +26,7 @@ class OrderPayer {
     @Autowired
     private lateinit var paymentService: PaymentService
     private val testTimeMs = 500000L
-    private val poolSize = 60
+    private val poolSize = 50
 
     private val paymentExecutor = ThreadPoolExecutor(
         poolSize,
